@@ -1,0 +1,244 @@
+# Documentación del Contrato de Subasta
+
+## Descripción General
+Contrato de subasta desplegado en Sepolia para el Trabajo Final del Módulo 2. Características:
+- Pujas con incremento mínimo del 5%.
+- Extensión de 10 minutos para pujas en los últimos 10 minutos.
+- Comisión del 2% en reembolsos de no ganadores.
+- Prohibición de pujas del propietario para evitar manipulaciones.
+- Comisiones acumuladas para transparencia.
+- Protección contra reentradas con modificador `sinReentradas`.
+
+## Funciones
+- **constructor**: Inicializa el propietario y la duración (7 días).
+- **ofertar**: Permite pujar (5% incremento, máximo 1000 ETH, propietario no puede pujar).
+- **obtenerGanador**: Devuelve el ganador y su oferta.
+- **obtenerTodasOfertas**: Lista oferentes y montos.
+- **retirar**: Permite retirar exceso o pujas no ganadoras.
+- **finalizarSubasta**: Cierra la subasta, reembolsa con 2% de comisión.
+- **retirarComisiones**: Retira comisiones acumuladas.
+
+## Eventos
+- **NuevaOferta**: Nueva puja registrada.
+- **SubastaFinalizada**: Subasta cerrada.
+- **OfertaRetirada**: Fondos retirados.
+- **ComisionesRetiradas**: Comisiones retiradas.
+
+## Variables
+- `propietario`: Dirección del creador.
+- `tiempoFinSubasta`: Timestamp de finalización.
+- `mejorOferente`, `mejorOferta`: Ganador y monto.
+- `finalizada`: Indica si la subasta terminó.
+- `comisionesAcumuladas`: Total de comisiones.
+- `bloqueado`: Previene reentradas.
+- `ofertas`: Mapeo de direcciones a montos.
+- `oferentes`: Lista de oferentes.
+- Constantes: `INCREMENTO_MINIMO` (5%), `EXTENSION_TIEMPO` (10 minutos), `PORCENTAJE_COMISION` (2%), `DURACION_SUBASTA` (7 días), `OFERTA_MAXIMA_PERMITIDA` (1000 ETH).
+
+## Seguridad
+- Modificador `sinReentradas` para prevenir reentradas.
+- Prohibición de pujas del propietario.
+- Comisiones acumuladas para transparencia.
+- Límite de 1000 ETH en pujas.
+- Balances actualizados antes de transferencias.
+- Rechazo de transferencias accidentales (`receive`).
+
+## Uso
+1. Desplegar en Sepolia con Remix y MetaMask.
+2. Interactuar con funciones y monitorear eventos en Etherscan.
+
+
+
+
+Codigo del smart contract
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// Contrato inteligente de subasta para el Trabajo Final del Módulo 2
+contract Subasta {
+    // Variables de estado
+    address public propietario; // Dirección del propietario del contrato
+    uint256 public tiempoFinSubasta; // Marca de tiempo cuando finaliza la subasta
+    address public mejorOferente; // Dirección del oferente con la oferta más alta
+    uint256 public mejorOferta; // Monto de la oferta más alta
+    bool public finalizada; // Indicador de si la subasta ha terminado
+    uint256 public comisionesAcumuladas; // Comisiones acumuladas para el propietario
+    bool private bloqueado; // Bloqueo para prevenir reentradas
+    uint256 public constant INCREMENTO_MINIMO = 5; // Incremento mínimo del 5% para nuevas ofertas
+    uint256 public constant EXTENSION_TIEMPO = 10 minutes; // Extensión de 10 minutos para ofertas de última hora
+    uint256 public constant PORCENTAJE_COMISION = 2; // Comisión del 2% sobre los reembolsos
+    uint256 public constant DURACION_SUBASTA = 7 days; // Duración predeterminada de la subasta
+    uint256 public constant OFERTA_MAXIMA_PERMITIDA = 1000 ether; // Límite máximo para evitar ofertas excesivas
+
+    // Mapeo para almacenar las ofertas por dirección
+    mapping(address => uint256) public ofertas;
+    // Arreglo para rastrear a todos los oferentes
+    address[] public oferentes;
+
+    // Eventos
+    event NuevaOferta(address indexed oferente, uint256 monto); // Emitido cuando se realiza una nueva oferta
+    event SubastaFinalizada(address indexed ganador, uint256 monto); // Emitido al finalizar la subasta
+    event OfertaRetirada(address indexed oferente, uint256 monto); // Emitido al retirar una oferta
+    event ComisionesRetiradas(address indexed propietario, uint256 monto); // Emitido al retirar comisiones
+
+    // Modificadores
+    modifier soloPropietario() {
+        require(msg.sender == propietario, "Solo el propietario puede ejecutar esta funcion");
+        _;
+    }
+
+    modifier subastaActiva() {
+        require(block.timestamp < tiempoFinSubasta, "La subasta ha finalizado");
+        require(!finalizada, "La subasta ya esta cerrada");
+        _;
+    }
+
+    modifier subastaFinalizada() {
+        require(block.timestamp >= tiempoFinSubasta || finalizada, "La subasta aun esta activa");
+        _;
+    }
+
+    modifier sinReentradas() {
+        require(!bloqueado, "Reentradas no permitidas");
+        bloqueado = true;
+        _;
+        bloqueado = false;
+    }
+
+    // Constructor
+    constructor() {
+        propietario = msg.sender; // Establece al creador como propietario
+        tiempoFinSubasta = block.timestamp + DURACION_SUBASTA; // Define el tiempo de finalización
+    }
+
+    // Función para realizar una oferta
+    function ofertar() external payable subastaActiva sinReentradas {
+        // Validaciones de la oferta
+        require(msg.sender != propietario, "El propietario no puede ofertar");
+        require(msg.value > 0, "La oferta debe ser mayor que 0");
+        require(msg.value <= OFERTA_MAXIMA_PERMITIDA, "Oferta excede el limite maximo permitido");
+        uint256 ofertaMinima = mejorOferta == 0 ? 1 wei : mejorOferta + (mejorOferta * INCREMENTO_MINIMO) / 100;
+        require(msg.value >= ofertaMinima, "La oferta debe ser al menos 5% mayor que la actual");
+
+        // Registra la oferta previa para posibles reembolsos
+        if (ofertas[msg.sender] > 0) {
+            // Suma a la oferta existente
+            ofertas[msg.sender] += msg.value;
+        } else {
+            // Nuevo oferente
+            ofertas[msg.sender] = msg.value;
+            oferentes.push(msg.sender);
+        }
+
+        // Actualiza la mejor oferta si corresponde
+        if (ofertas[msg.sender] > mejorOferta) {
+            mejorOferta = ofertas[msg.sender];
+            mejorOferente = msg.sender;
+
+            // Extiende la subasta si la oferta se realiza en los últimos 10 minutos
+            if (tiempoFinSubasta - block.timestamp < EXTENSION_TIEMPO) {
+                tiempoFinSubasta += EXTENSION_TIEMPO;
+            }
+        }
+
+        emit NuevaOferta(msg.sender, msg.value);
+    }
+
+    // Función para obtener el oferente ganador y el monto de su oferta
+    function obtenerGanador() external view returns (address, uint256) {
+        return (mejorOferente, mejorOferta);
+    }
+
+    // Función para obtener todas las ofertas
+    function obtenerTodasOfertas() external view returns (address[] memory, uint256[] memory) {
+        uint256[] memory montosOfertas = new uint256[](oferentes.length);
+        for (uint256 i = 0; i < oferentes.length; i++) {
+            montosOfertas[i] = ofertas[oferentes[i]];
+        }
+        return (oferentes, montosOfertas);
+    }
+
+    // Función para retirar ofertas no ganadoras o exceso de ofertas
+    function retirar() external sinReentradas {
+        uint256 monto = ofertas[msg.sender];
+        require(monto > 0, "No hay fondos para retirar");
+
+        // Si es el mejor oferente, solo puede retirar el exceso sobre la mejor oferta
+        if (msg.sender == mejorOferente) {
+            require(monto > mejorOferta, "No se puede retirar la oferta ganadora");
+            monto = monto - mejorOferta;
+        }
+
+        // Actualiza el balance antes de la transferencia
+        ofertas[msg.sender] -= monto;
+        emit OfertaRetirada(msg.sender, monto);
+
+        // Transfiere los fondos
+        (bool exito, ) = msg.sender.call{value: monto}("");
+        require(exito, "Fallo la transferencia de reembolso");
+    }
+
+    // Función para finalizar la subasta y procesar reembolsos
+    function finalizarSubasta() external soloPropietario subastaFinalizada sinReentradas {
+        require(!finalizada, "La subasta ya ha finalizado");
+        finalizada = true;
+
+        // Procesa reembolsos para los no ganadores
+        for (uint256 i = 0; i < oferentes.length; i++) {
+            address oferente = oferentes[i];
+            if (oferente != mejorOferente && ofertas[oferente] > 0) {
+                uint256 montoReembolso = ofertas[oferente];
+                uint256 comision = (montoReembolso * PORCENTAJE_COMISION) / 100;
+                montoReembolso -= comision;
+
+                // Acumula comisiones
+                comisionesAcumuladas += comision;
+
+                // Actualiza el balance antes de la transferencia
+                ofertas[oferente] = 0;
+
+                // Transfiere reembolso al oferente
+                (bool exito, ) = oferente.call{value: montoReembolso}("");
+                require(exito, "Fallo la transferencia de reembolso");
+            }
+        }
+
+        // Transfiere la oferta ganadora al contrato
+        if (mejorOferta > 0) {
+            uint256 comision = (mejorOferta * PORCENTAJE_COMISION) / 100;
+            uint256 montoPropietario = mejorOferta - comision;
+
+            // Acumula comisiones
+            comisionesAcumuladas += comision;
+
+            // Actualiza el balance del ganador
+            ofertas[mejorOferente] = 0;
+
+            // Transfiere el monto al propietario
+            (bool exito, ) = propietario.call{value: montoPropietario}("");
+            require(exito, "Fallo la transferencia del monto ganador");
+        }
+
+        emit SubastaFinalizada(mejorOferente, mejorOferta);
+    }
+
+    // Función para que el propietario retire las comisiones acumuladas
+    function retirarComisiones() external soloPropietario sinReentradas {
+        uint256 monto = comisionesAcumuladas;
+        require(monto > 0, "No hay comisiones para retirar");
+
+        // Actualiza el balance de comisiones
+        comisionesAcumuladas = 0;
+
+        // Transfiere las comisiones al propietario
+        (bool exito, ) = propietario.call{value: monto}("");
+        require(exito, "Fallo la transferencia de comisiones");
+
+        emit ComisionesRetiradas(propietario, monto);
+    }
+
+    // Función de respaldo para evitar transferencias accidentales de ETH
+    receive() external payable {
+        revert("Utiliza la funcion ofertar() para realizar ofertas");
+    }
+}
